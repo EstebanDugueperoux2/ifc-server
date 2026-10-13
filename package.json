@@ -1,0 +1,29 @@
+{
+  "name": "ifc-server",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "IFC processing server with TypeScript client",
+  "scripts": {
+    "example": "npx tsx src/example.ts",
+    "example:stream": "npx tsx src/example-stream.ts",
+    "server:start": "docker compose up -d",
+    "server:stop": "docker compose down",
+    "server:logs": "docker compose logs -f",
+    "server:dev": "docker compose -f docker-compose.dev.yml up",
+    "build": "tsc",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@ifc-lite/server-client": "^4.0.1"
+  },
+  "devDependencies": {
+    "typescript": "^5.3.0",
+    "tsx": "^4.0.0",
+    "@types/node": "^20.0.0"
+  },
+  "optionalDependencies": {
+    "parquet-wasm": "^0.7.2",
+    "apache-arrow": "^17.0.0"
+  }
+}

@@ -1,0 +1,20 @@
+# IFC-Lite Server - Development Configuration
+# Start with: docker compose -f docker-compose.dev.yml up
+
+services:
+  ifc-server:
+    image: ghcr.io/ltplus-ag/ifc-lite-server:latest
+    container_name: ifc-server-server-dev
+    ports:
+      - "${PORT:-3001}:8080"
+    volumes:
+      - ./cache:/app/cache  # Local cache directory for inspection
+    environment:
+      - RUST_LOG=debug,tower_http=debug,ifc_lite_server=debug
+      - MAX_FILE_SIZE_MB=${MAX_FILE_SIZE_MB:-500}
+      - REQUEST_TIMEOUT_SECS=${REQUEST_TIMEOUT_SECS:-300}
+      - WORKER_THREADS=${WORKER_THREADS:-4}
+      - INITIAL_BATCH_SIZE=${INITIAL_BATCH_SIZE:-100}
+      - MAX_BATCH_SIZE=${MAX_BATCH_SIZE:-1000}
+      - CACHE_MAX_AGE_DAYS=${CACHE_MAX_AGE_DAYS:-30}
+    # No restart in dev - easier to debug
