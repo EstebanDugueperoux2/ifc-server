@@ -136,3 +136,17 @@ RUST_LOG=info
 ## Companion project
 
 `ifc-viewer-webapp` is the browser viewer built on IFC-Lite. This repository runs the IFC-Lite processing server (Docker) and a TypeScript client (`@ifc-lite/server-client`).
+
+## Model store
+
+The IFC-Lite server only parses files and caches the results; it does not keep your `.ifc` files. The `model-store` service (`model-store/server.mjs`, no dependencies) fills that gap. It is started by `docker compose up -d` on port 3002 and persists files in the `ifc-models` volume.
+
+| Method | Path | Description |
+|---|---|---|
+| GET | `/api/v1/models` | List stored models (`id`, `name`, `size`, `createdAt`) |
+| POST | `/api/v1/models` | Store a model: raw IFC body, name in the `X-Model-Name` header (URL-encoded) |
+| GET | `/api/v1/models/:id` | Download the IFC file |
+| DELETE | `/api/v1/models/:id` | Delete a model |
+| GET | `/api/v1/health` | Health check |
+
+Only STEP/IFC content is accepted (`ISO-10303-21` header). Set `STORE_API_TOKEN` to require `Authorization: Bearer <token>`.

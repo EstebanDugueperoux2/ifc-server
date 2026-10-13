@@ -18,3 +18,14 @@ services:
       - MAX_BATCH_SIZE=${MAX_BATCH_SIZE:-1000}
       - CACHE_MAX_AGE_DAYS=${CACHE_MAX_AGE_DAYS:-30}
     # No restart in dev - easier to debug
+
+  model-store:
+    build: ./model-store
+    container_name: ifc-server-model-store-dev
+    ports:
+      - "${STORE_PORT:-3002}:8081"
+    volumes:
+      - ./models:/data  # Local directory for inspecting stored models
+    environment:
+      - STORE_API_TOKEN=${STORE_API_TOKEN:-}
+      - CORS_ALLOWED_ORIGINS=${CORS_ALLOWED_ORIGINS:-}

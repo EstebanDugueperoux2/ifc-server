@@ -25,6 +25,24 @@ services:
       start_period: 5s
     restart: unless-stopped
 
+  # IFC model storage (save / list / download / delete .ifc files)
+  model-store:
+    build: ./model-store
+    container_name: ifc-server-model-store
+    ports:
+      - "${STORE_PORT:-3002}:8081"
+    volumes:
+      - ifc-models:/data
+    environment:
+      - MAX_FILE_SIZE_MB=${MAX_FILE_SIZE_MB:-500}
+      # Optional bearer token required on every /api/v1/models request
+      - STORE_API_TOKEN=${STORE_API_TOKEN:-}
+      # Comma-separated origins allowed to call the store directly from a browser
+      - CORS_ALLOWED_ORIGINS=${CORS_ALLOWED_ORIGINS:-}
+    restart: unless-stopped
+
 volumes:
   ifc-cache:
     name: ifc-server-cache
+  ifc-models:
+    name: ifc-server-models
