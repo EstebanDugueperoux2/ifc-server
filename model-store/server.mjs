@@ -3,6 +3,7 @@
 //   GET    /api/v1/models        -> [{ id, name, size, createdAt }]
 //   POST   /api/v1/models        -> body: raw IFC text, header X-Model-Name  -> 201 { id, ... }
 //   GET    /api/v1/models/:id    -> the IFC file
+//   PUT    /api/v1/models/:id    -> replace the IFC content (optional X-Model-Name renames)
 //   DELETE /api/v1/models/:id
 //   GET    /api/v1/health
 //
@@ -78,6 +79,19 @@ function readBody(req) {
   });
 }
 
+function assertIfc(body) {
+  if (body.length === 0) throw new HttpError(400, 'Empty body');
+  if (!body.subarray(0, 64).toString('utf8').trimStart().startsWith('ISO-10303-21')) {
+    throw new HttpError(415, 'Not an IFC (STEP) file');
+  }
+}
+
+async function writeModelFile(id, body) {
+  const tmp = path.join(DATA_DIR, `${id}.ifc.tmp`);
+  await writeFile(tmp, body);
+  await rename(tmp, path.join(DATA_DIR, `${id}.ifc`));
+}
+
 async function listModels() {
   const files = (await readdir(DATA_DIR)).filter((f) => f.endsWith('.json'));
   const items = [];
@@ -108,10 +122,7 @@ async function handle(req, res) {
     if (req.method === 'GET') return send(res, 200, await listModels());
     if (req.method === 'POST') {
       const body = await readBody(req);
-      if (body.length === 0) throw new HttpError(400, 'Empty body');
-      if (!body.subarray(0, 64).toString('utf8').trimStart().startsWith('ISO-10303-21')) {
-        throw new HttpError(415, 'Not an IFC (STEP) file');
-      }
+      assertIfc(body);
       const newId = randomUUID();
       const meta = {
         id: newId,
@@ -119,9 +130,7 @@ async function handle(req, res) {
         size: body.length,
         createdAt: new Date().toISOString(),
       };
-      const tmp = path.join(DATA_DIR, `${newId}.ifc.tmp`);
-      await writeFile(tmp, body);
-      await rename(tmp, path.join(DATA_DIR, `${newId}.ifc`));
+      await writeModelFile(newId, body);
       await writeFile(path.join(DATA_DIR, `${newId}.json`), JSON.stringify(meta));
       return send(res, 201, meta);
     }
@@ -134,6 +143,22 @@ async function handle(req, res) {
 
   if (req.method === 'GET') {
     return send(res, 200, await readFile(ifcPath), { 'Content-Type': 'application/x-step' });
+  }
+  if (req.method === 'PUT') {
+    const body = await readBody(req);
+    assertIfc(body);
+    const metaPath = path.join(DATA_DIR, `${id}.json`);
+    const previous = JSON.parse(await readFile(metaPath, 'utf8'));
+    const renamed = req.headers['x-model-name'];
+    const meta = {
+      ...previous,
+      name: renamed ? cleanName(renamed) : previous.name,
+      size: body.length,
+      updatedAt: new Date().toISOString(),
+    };
+    await writeModelFile(id, body);
+    await writeFile(metaPath, JSON.stringify(meta));
+    return send(res, 200, meta);
   }
   if (req.method === 'DELETE') {
     await rm(ifcPath, { force: true });
@@ -150,7 +175,7 @@ http
       res.setHeader('Access-Control-Allow-Origin', origin);
       res.setHeader('Vary', 'Origin');
       res.setHeader('Access-Control-Allow-Headers', 'Authorization, Content-Type, X-Model-Name');
-      res.setHeader('Access-Control-Allow-Methods', 'GET, POST, DELETE, OPTIONS');
+      res.setHeader('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS');
       // Needed when the webapp runs with Cross-Origin-Embedder-Policy: require-corp.
       res.setHeader('Cross-Origin-Resource-Policy', 'cross-origin');
     }

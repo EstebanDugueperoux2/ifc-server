@@ -1,0 +1,18 @@
+{
+  "name": "ifc-assistant",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "AI assistant gateway: Anthropic tool-use loop wired to an embedded @ifc-lite/mcp server",
+  "scripts": {
+    "start": "node server.mjs",
+    "test": "node --test test/e2e.test.mjs"
+  },
+  "engines": {
+    "node": ">=22"
+  },
+  "dependencies": {
+    "@ifc-lite/create": "^5.1.0",
+    "@ifc-lite/mcp": "^0.26.2"
+  }
+}
