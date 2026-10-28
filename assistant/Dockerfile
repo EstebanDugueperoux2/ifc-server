@@ -3,6 +3,7 @@ WORKDIR /app
 COPY package.json package-lock.json ./
 RUN npm ci --omit=dev
 COPY *.mjs ./
+COPY providers/ ./providers/
 ENV PORT=8082 WORK_DIR=/tmp/ifc-assistant
 USER node
 EXPOSE 8082

@@ -8,7 +8,7 @@ export const READ_TOOLS = [
   'model_audit',
 ];
 
-/** Editing MCP tools. Edits stay pending in the session until save_to_library is called. */
+/** Editing MCP tools. Edits stay in the conversation's temporary model. */
 export const WRITE_TOOLS = [
   'entity_set_property', 'entity_delete_property', 'entity_set_attribute', 'entity_create', 'entity_delete',
   'mutation_batch', 'mutation_diff', 'mutation_undo', 'place_opening', 'place_door', 'place_window',
@@ -22,7 +22,7 @@ export const CUSTOM_TOOLS = {
       'Create a brand-new IFC4 model (replacing the model currently open in this conversation, whose unsaved edits are lost) ' +
       'and make it the active model. Units are metres, Z is up. Each storey has an elevation and lists of walls (axis start/end), ' +
       'slabs (origin corner + width along X + depth along Y, extruded upwards by thickness) and columns (base position + width/depth/height). ' +
-      'Coordinates inside a storey are relative to that storey elevation. Call save_to_library afterwards so the user can see it.',
+      'Coordinates inside a storey are relative to that storey elevation. The model exists only for this conversation.',
     input_schema: {
       type: 'object',
       properties: {
@@ -84,19 +84,9 @@ export const CUSTOM_TOOLS = {
       required: ['name', 'storeys'],
     },
   },
-  save_to_library: {
-    name: 'save_to_library',
-    description:
-      'Persist the active model, including all pending edits, to the model library so that it appears in the 3D viewer. ' +
-      'Call it after creating or modifying a model. Whether it updates the opened model or a separate copy is decided by the user, not by you.',
-    input_schema: {
-      type: 'object',
-      properties: { name: { type: 'string', description: 'Optional display name for a newly created library entry.' } },
-    },
-  },
 };
 
-/** Anthropic tool definitions from the MCP tool list, restricted to the allowlist. */
+/** Provider tool definitions from the MCP tool list, restricted to the allowlist. */
 export function buildToolDefs(mcpTools, { readOnly }) {
   const allowed = new Set(readOnly ? READ_TOOLS : [...READ_TOOLS, ...WRITE_TOOLS]);
   const taking = new Set();
@@ -111,6 +101,6 @@ export function buildToolDefs(mcpTools, { readOnly }) {
     }
     defs.push({ name: tool.name, description: tool.description ?? '', input_schema: schema });
   }
-  if (!readOnly) defs.push(CUSTOM_TOOLS.create_model, CUSTOM_TOOLS.save_to_library);
-  return { defs, modelIdTools: taking, allowed };
+  if (!readOnly) defs.push(CUSTOM_TOOLS.create_model);
+  return { defs, activeModelTools: taking, allowed };
 }

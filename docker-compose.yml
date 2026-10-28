@@ -1,5 +1,16 @@
 # IFC-Lite Server - Production Configuration
 # Start with: docker compose up -d
+#
+# =============================================================================
+# PARQUET-WASM / APACHE-ARROW SUPPORT
+# =============================================================================
+# For 15x smaller payloads, use Parquet format:
+# 1. The ifc-server supports Parquet by default via /api/v1/parse/parquet endpoints
+# 2. The ifc-viewer-webapp includes apache-arrow and parquet-wasm dependencies
+# 3. CORS headers are configured to allow browser WASM module loading
+# 4. For production: Build ifc-viewer-webapp with `npm run build`
+#    This bundles the WASM modules for the browser
+# 5. For development: Use Vite dev server (port 5173) which proxies to backend
 
 services:
   ifc-server:
@@ -10,7 +21,13 @@ services:
     volumes:
       - ifc-cache:/app/cache
     environment:
+      # Parquet format is enabled by default in the ifc-lite-server image
+      # Use /api/v1/parse/parquet or /api/v1/parse/parquet-stream endpoints for 15x smaller payloads
+      # Requires apache-arrow and parquet-wasm in the client (included in ifc-viewer-webapp dependencies)
+      # For browser WASM support, CORS headers must be configured:
       - RUST_LOG=${RUST_LOG:-info}
+      - CORS_ALLOWED_ORIGINS=${CORS_ALLOWED_ORIGINS:-*}
+      - CORS_ORIGINS=*
       - MAX_FILE_SIZE_MB=${MAX_FILE_SIZE_MB:-500}
       - REQUEST_TIMEOUT_SECS=${REQUEST_TIMEOUT_SECS:-300}
       - WORKER_THREADS=${WORKER_THREADS:-4}
@@ -25,44 +42,58 @@ services:
       start_period: 5s
     restart: unless-stopped
 
-  # IFC model storage (save / list / download / delete .ifc files)
-  model-store:
-    build: ./model-store
-    container_name: ifc-server-model-store
-    ports:
-      - "127.0.0.1:${STORE_PORT:-3002}:8081"
-    volumes:
-      - ifc-models:/data
-    environment:
-      - MAX_FILE_SIZE_MB=${MAX_FILE_SIZE_MB:-500}
-      # Optional bearer token required on every /api/v1/models request
-      - STORE_API_TOKEN=${STORE_API_TOKEN:-}
-      # Comma-separated origins allowed to call the store directly from a browser
-      - CORS_ALLOWED_ORIGINS=${CORS_ALLOWED_ORIGINS:-}
-    restart: unless-stopped
-
-  # AI assistant: Anthropic tool-use loop + embedded @ifc-lite/mcp server
+  # AI assistant: tool-use loop + embedded @ifc-lite/mcp server
+  # Supports multiple AI providers: anthropic, openai, mistral, google
+  # Note: For parquet-wasm/apache-arrow support, ensure ifc-viewer-webapp is built
+  # with npm dependencies (apache-arrow, parquet-wasm) and Vite handles WASM modules
   assistant:
     build: ./assistant
     container_name: ifc-server-assistant
-    depends_on:
-      - model-store
     ports:
-      # Loopback only by default: every request spends Anthropic API credits.
+      # Loopback only by default: every request spends API credits.
       - "127.0.0.1:${ASSISTANT_PORT:-3003}:8082"
     environment:
-      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY:-}
-      - ANTHROPIC_MODEL=${ANTHROPIC_MODEL:-claude-sonnet-5-5}
+      # AI Provider Selection
+      - ASSISTANT_PROVIDER=${ASSISTANT_PROVIDER:-openai}
+      
+      # # Anthropic Configuration
+      # - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY:-}
+      # - ANTHROPIC_BASE_URL=${ANTHROPIC_BASE_URL:-}
+      # - ANTHROPIC_MODEL=${ANTHROPIC_MODEL:-claude-sonnet-5-5}
+      # - ANTHROPIC_TIMEOUT_SEC=${ANTHROPIC_TIMEOUT_SEC:-120}
+      
+      # OpenAI Configuration (Default Provider)
+      - OPENAI_API_KEY=${OPENAI_API_KEY:-}
+      - OPENAI_BASE_URL=${OPENAI_BASE_URL:-}
+      - OPENAI_MODEL=${OPENAI_MODEL:-gpt-4}
+      - OPENAI_TIMEOUT_SEC=${OPENAI_TIMEOUT_SEC:-120}
+      
+      # # Mistral Configuration
+      # - MISTRAL_API_KEY=${MISTRAL_API_KEY:-}
+      # - MISTRAL_BASE_URL=${MISTRAL_BASE_URL:-}
+      # - MISTRAL_MODEL=${MISTRAL_MODEL:-mistral-large}
+      # - MISTRAL_TIMEOUT_SEC=${MISTRAL_TIMEOUT_SEC:-120}
+      
+      # # Google (Gemini) Configuration
+      # - GOOGLE_API_KEY=${GOOGLE_API_KEY:-}
+      # - GOOGLE_BASE_URL=${GOOGLE_BASE_URL:-}
+      # - GOOGLE_MODEL=${GOOGLE_MODEL:-gemini-pro}
+      # - GOOGLE_TIMEOUT_SEC=${GOOGLE_TIMEOUT_SEC:-120}
+      
+      # Common Assistant Settings
       - ASSISTANT_API_TOKEN=${ASSISTANT_API_TOKEN:-}
       - ASSISTANT_READ_ONLY=${ASSISTANT_READ_ONLY:-false}
-      - MAX_MODEL_MB=${ASSISTANT_MAX_MODEL_MB:-100}
-      - STORE_URL=http://model-store:8081
-      - STORE_API_TOKEN=${STORE_API_TOKEN:-}
-      - CORS_ALLOWED_ORIGINS=${CORS_ALLOWED_ORIGINS:-}
+      - MAX_TOKENS=${MAX_TOKENS:-4096}
+      - MAX_STEPS=${MAX_STEPS:-12}
+      - MAX_CONVERSATIONS=${MAX_CONVERSATIONS:-50}
+      - CONVERSATION_TTL_MIN=${CONVERSATION_TTL_MIN:-30}
+      - MAX_MESSAGE_CHARS=${MAX_MESSAGE_CHARS:-4000}
+      
+      # CORS origins for browser access to assistant API (Vite dev server by default)
+      - CORS_ALLOWED_ORIGINS=${CORS_ALLOWED_ORIGINS:-*}
+      - CORS_ORIGINS=*
     restart: unless-stopped
 
 volumes:
   ifc-cache:
     name: ifc-server-cache
-  ifc-models:
-    name: ifc-server-models

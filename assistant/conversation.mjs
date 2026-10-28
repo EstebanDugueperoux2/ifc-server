@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto';
-import { mkdir, rm, writeFile, readFile } from 'node:fs/promises';
+import { mkdir, rm, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { createMcpSession } from './mcp-session.mjs';
 import { buildToolDefs } from './tools.mjs';
@@ -10,10 +10,9 @@ const MAX_HISTORY_CHARS = 400_000;
 export const ID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
 
 export class Conversation {
-  constructor({ id, config, store }) {
+  constructor({ id, config }) {
     this.id = id;
     this.config = config;
-    this.store = store;
     this.dir = path.join(config.workDir, id);
     /** @type {Array<Array<{role: string, content: any}>>} one array of messages per user turn */
     this.turns = [];
@@ -21,13 +20,8 @@ export class Conversation {
     this.lastUsed = Date.now();
     this.mcp = null;
     this.tools = null;
-    /** Stored model currently loaded as 'active' (null: nothing, or an unsaved model made by create_model). */
-    this.activeStoredId = null;
     this.activeName = null;
     this.hasModel = false;
-    /** Library entry created by the assistant in this conversation (later saves update it). */
-    this.workingCopyId = null;
-    this.saveMode = 'new';
   }
 
   async init() {
@@ -56,62 +50,17 @@ export class Conversation {
   async unloadModel() {
     if (this.hasModel) await this.mcp.callTool('model_unload', { model_id: 'active' });
     this.hasModel = false;
-    this.activeStoredId = null;
     this.activeName = null;
   }
 
-  async loadFromBuffer(buffer, { storedId, name }) {
+  async loadFromBuffer(buffer, name) {
     await this.unloadModel();
     const file = path.join(this.dir, 'active.ifc');
     await writeFile(file, buffer);
     const result = await this.mcp.callTool('model_load', { file_path: file, model_id: 'active' });
     if (result.isError) throw new Error(`Could not load the model: ${result.text}`);
     this.hasModel = true;
-    this.activeStoredId = storedId;
     this.activeName = name;
-  }
-
-  /** Aligns the session with the model the user has open in the viewer. */
-  async syncModel(modelId) {
-    if (modelId === undefined) return;
-    if (modelId === null) {
-      if (this.activeStoredId !== null) await this.unloadModel();
-      if (this.activeStoredId === null && this.hasModel === false) this.workingCopyId = null;
-      return;
-    }
-    if (modelId === this.activeStoredId && this.hasModel) return;
-    const entry = (await this.store.list()).find((model) => model.id === modelId);
-    if (!entry) throw new Error('The selected model no longer exists in the library.');
-    if (entry.size > this.config.maxModelBytes) {
-      throw new Error(`This model is too large for the assistant (${Math.round(entry.size / 1e6)} MB, limit ${Math.round(this.config.maxModelBytes / 1e6)} MB).`);
-    }
-    await this.loadFromBuffer(await this.store.download(modelId), { storedId: modelId, name: entry.name });
-    // Opening a model the assistant did not create ends the link with its previous working copy.
-    if (modelId !== this.workingCopyId) this.workingCopyId = null;
-  }
-
-  /** Exports the active model and stores it according to the user's save mode. */
-  async save(requestedName) {
-    if (!this.hasModel) throw new Error('There is no active model to save.');
-    const file = path.join(this.dir, 'export.ifc');
-    const exported = await this.mcp.callTool('export_ifc', { model_id: 'active', file_path: file });
-    if (exported.isError) throw new Error(`Export failed: ${exported.text}`);
-    const content = await readFile(file);
-
-    const baseName = (this.activeName ?? 'Model').replace(/ \(assistant\)$/, '');
-    let meta;
-    if (this.saveMode === 'overwrite' && this.activeStoredId) {
-      meta = await this.store.replace(this.activeStoredId, content);
-    } else if (this.workingCopyId) {
-      meta = await this.store.replace(this.workingCopyId, content);
-    } else {
-      const name = (requestedName && requestedName.trim()) || (this.activeStoredId ? `${baseName} (assistant)` : baseName);
-      meta = await this.store.create(name, content);
-      this.workingCopyId = meta.id;
-    }
-    this.activeStoredId = meta.id;
-    this.activeName = meta.name;
-    return meta;
   }
 
   async dispose() {
@@ -121,9 +70,8 @@ export class Conversation {
 }
 
 export class ConversationStore {
-  constructor({ config, store }) {
+  constructor({ config }) {
     this.config = config;
-    this.store = store;
     this.items = new Map();
     this.timer = setInterval(() => void this.sweep(), 60_000);
     this.timer.unref();
@@ -137,7 +85,7 @@ export class ConversationStore {
     }
     if (this.items.size >= this.config.maxConversations) await this.sweep(true);
     if (this.items.size >= this.config.maxConversations) throw Object.assign(new Error('Too many active conversations, try again later.'), { status: 503 });
-    const conversation = new Conversation({ id: id ?? randomUUID(), config: this.config, store: this.store });
+    const conversation = new Conversation({ id: id ?? randomUUID(), config: this.config });
     await conversation.init();
     this.items.set(conversation.id, conversation);
     return conversation;

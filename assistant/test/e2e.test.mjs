@@ -1,19 +1,16 @@
-// End-to-end: real model-store + real embedded @ifc-lite/mcp, scripted fake Anthropic API.
+// End-to-end: real embedded @ifc-lite/mcp, scripted fake AI provider.
 import { test, before, after } from 'node:test';
 import assert from 'node:assert/strict';
 import http from 'node:http';
 import os from 'node:os';
 import path from 'node:path';
 import { mkdtemp, rm } from 'node:fs/promises';
-import { spawn } from 'node:child_process';
 import { createApp, loadConfig } from '../server.mjs';
-import { buildModel } from '../create-model.mjs';
 
-const STORE_TOKEN = 'store-secret';
 const ASSISTANT_TOKEN = 'assistant-secret';
 const API_KEY = 'sk-test-key';
 
-let tmp, storeProc, storeUrl, mock, mockUrl, app, base;
+let tmp, mock, mockUrl, app, base;
 let script = () => ({ content: [{ type: 'text', text: 'ok' }], stop_reason: 'end_turn' });
 const received = [];
 
@@ -27,17 +24,6 @@ const freePort = async () => {
 
 before(async () => {
   tmp = await mkdtemp(path.join(os.tmpdir(), 'assistant-e2e-'));
-  const storePort = await freePort();
-  storeUrl = `http://127.0.0.1:${storePort}`;
-  storeProc = spawn('node', [new URL('../../model-store/server.mjs', import.meta.url).pathname], {
-    env: { ...process.env, PORT: String(storePort), DATA_DIR: path.join(tmp, 'store'), STORE_API_TOKEN: STORE_TOKEN },
-    stdio: 'ignore',
-  });
-  for (let i = 0; i < 50; i += 1) {
-    try { if ((await fetch(`${storeUrl}/api/v1/health`)).ok) break; } catch { /* retry */ }
-    await new Promise((r) => setTimeout(r, 100));
-  }
-
   mock = http.createServer(async (req, res) => {
     const chunks = [];
     for await (const c of req) chunks.push(c);
@@ -55,8 +41,9 @@ before(async () => {
   mockUrl = `http://127.0.0.1:${await listen(mock)}`;
 
   app = await createApp(loadConfig({
-    ANTHROPIC_API_KEY: API_KEY, ANTHROPIC_BASE_URL: mockUrl, STORE_URL: storeUrl, STORE_API_TOKEN: STORE_TOKEN,
+    ANTHROPIC_API_KEY: API_KEY, ANTHROPIC_BASE_URL: mockUrl,
     ASSISTANT_API_TOKEN: ASSISTANT_TOKEN, WORK_DIR: path.join(tmp, 'work'),
+    ASSISTANT_PROVIDER: 'anthropic',
   }));
   base = `http://127.0.0.1:${await listen(app.server)}`;
 });
@@ -65,11 +52,8 @@ after(async () => {
   await app?.close();
   mock?.close();
   mock?.closeAllConnections?.();
-  storeProc?.kill();
   await rm(tmp, { recursive: true, force: true });
 });
-
-const storeApi = (suffix = '', init = {}) => fetch(`${storeUrl}/api/v1/models${suffix}`, { ...init, headers: { Authorization: `Bearer ${STORE_TOKEN}`, ...(init.headers ?? {}) } });
 
 async function chat(payload, token = ASSISTANT_TOKEN) {
   const res = await fetch(`${base}/api/v1/chat`, {
@@ -94,17 +78,14 @@ test('auth, validation and configuration errors', async () => {
   assert.equal((await chat({ message: '  ' })).status, 400);
   assert.equal((await chat({ message: 'x'.repeat(5000) })).status, 400);
   assert.equal((await chat({ message: 'hi', conversationId: '../../etc' })).status, 400);
-  assert.equal((await chat({ message: 'hi', modelId: 'nope' })).status, 400);
-  assert.equal((await chat({ message: 'hi', saveMode: 'destroy' })).status, 400);
   const health = await (await fetch(`${base}/api/v1/health`)).json();
   assert.equal(health.llmConfigured, true);
 });
 
-test('create a model, save it, then query and edit it in a follow-up turn', async () => {
+test('create a temporary model, then query and edit it in a follow-up turn', async () => {
   received.length = 0;
   script = (body, n) => {
     if (n === 1) return toolUse('create_model', hall, 'toolu_create');
-    if (n === 2) return toolUse('save_to_library', {}, 'toolu_save');
     return answer('Created the hall.');
   };
   const first = await chat({ message: 'Create a 10x6 hall' });
@@ -112,30 +93,21 @@ test('create a model, save it, then query and edit it in a follow-up turn', asyn
   const types = first.events.map((e) => e.type);
   assert.deepEqual(
     types,
-    ['conversation', 'tool_use', 'tool_result', 'tool_use', 'model_saved', 'tool_result', 'text', 'done'],
+    ['conversation', 'tool_use', 'tool_result', 'text', 'done'],
     JSON.stringify(first.events),
   );
   const conversationId = first.events[0].conversationId;
-  const saved = first.events.find((e) => e.type === 'model_saved').model;
-  assert.equal(saved.name, 'Hall é');
-
   // The API request carried the right credentials, a curated toolset and a cached system prompt.
   const request = received[0];
   assert.equal(request.headers['x-api-key'], API_KEY);
   const names = request.body.tools.map((t) => t.name);
-  assert.ok(names.includes('create_model') && names.includes('save_to_library') && names.includes('query_entities'));
+  assert.ok(names.includes('create_model') && names.includes('query_entities'));
   for (const forbidden of ['model_load', 'model_save', 'export_ifc', 'run_flow', 'viewer_open', 'bcf_export']) assert.ok(!names.includes(forbidden), forbidden);
   assert.ok(request.body.tools.every((t) => !t.input_schema.properties?.model_id), 'model_id is hidden from the model');
   assert.match(request.body.system[1].text, /no model is loaded/);
   assert.match(lastToolResult(received[1].body).content, /Created and loaded "Hall é": 1 storey\(s\), 4 wall\(s\), 1 slab\(s\)/);
 
-  // Stored as a valid IFC.
-  const listed = await (await storeApi()).json();
-  assert.equal(listed.length, 1);
-  const stored = await (await storeApi(`/${saved.id}`)).text();
-  assert.equal((stored.match(/IFCWALL\(/g) ?? []).length, 4);
-
-  // Follow-up: the webapp reopened the saved model; edit a wall and save again (updates the working copy).
+  // Follow-up: the same temporary model stays available in the conversation.
   received.length = 0;
   let wallId;
   script = (body, n) => {
@@ -146,39 +118,12 @@ test('create a model, save it, then query and edit it in a follow-up turn', asyn
       wallId = Number(text.match(/IfcWall #(\d+)/)[1]);
       return toolUse('entity_set_attribute', { express_id: wallId, attribute: 'Name', value: 'Mur Nord' }, 'toolu_set');
     }
-    if (n === 3) return toolUse('save_to_library', {}, 'toolu_save2');
     return answer('Renamed.');
   };
-  const second = await chat({ message: 'Rename the first wall', conversationId, modelId: saved.id });
+  const second = await chat({ message: 'Rename the first wall', conversationId });
   assert.ok(!second.events.some((e) => e.type === 'error'), JSON.stringify(second.events));
-  assert.match(received[0].body.system[1].text, /"Hall é" is loaded as "active"/);
-  // First turn = user, assistant(tool_use), user(tool_result) x2, assistant(text): 6 messages, plus the new question.
-  assert.equal(received[0].body.messages.length, 7, 'history of the first turn is kept');
-  const after2 = await (await storeApi()).json();
-  assert.equal(after2.length, 1, 'working copy updated in place, no duplicate');
-  assert.ok(after2[0].updatedAt);
-  assert.match(await (await storeApi(`/${saved.id}`)).text(), /Mur Nord/);
-});
-
-test('save modes: "new" forks the opened model, "overwrite" updates it', async () => {
-  const original = await (await storeApi('', { method: 'POST', headers: { 'X-Model-Name': 'Original' }, body: buildModel(hall).content })).json();
-  const edit = (name) => (body, n) => (n === 1 ? toolUse('query_entities', { type: 'IfcWall', limit: 1 }) : n === 2
-    ? toolUse('entity_set_attribute', { express_id: Number(lastToolResult(body).content.match(/#(\d+)/)[1]), attribute: 'Name', value: name })
-    : n === 3 ? toolUse('save_to_library', {}) : answer('done'));
-
-  received.length = 0;
-  script = edit('Forked');
-  const forked = await chat({ message: 'edit', modelId: original.id, saveMode: 'new' });
-  const copy = forked.events.find((e) => e.type === 'model_saved').model;
-  assert.notEqual(copy.id, original.id);
-  assert.equal(copy.name, 'Original (assistant)');
-  assert.doesNotMatch(await (await storeApi(`/${original.id}`)).text(), /Forked/, 'original untouched');
-
-  received.length = 0;
-  script = edit('Overwritten');
-  const over = await chat({ message: 'edit', modelId: original.id, saveMode: 'overwrite' });
-  assert.equal(over.events.find((e) => e.type === 'model_saved').model.id, original.id);
-  assert.match(await (await storeApi(`/${original.id}`)).text(), /Overwritten/);
+  assert.match(received[0].body.system[1].text, /"Hall é" is loaded as "active" for this conversation/);
+  assert.equal(received[0].body.messages.length, 5, 'history of the first turn is kept');
 });
 
 test('the model cannot reach files or unlisted tools', async () => {
@@ -219,8 +164,9 @@ test('upstream failure is reported and the broken turn is rolled back', async ()
 
 test('an unresponsive upstream times out instead of hanging', async () => {
   const slowApp = await createApp(loadConfig({
-    ANTHROPIC_API_KEY: API_KEY, ANTHROPIC_BASE_URL: mockUrl, STORE_URL: storeUrl, STORE_API_TOKEN: STORE_TOKEN,
+    ANTHROPIC_API_KEY: API_KEY, ANTHROPIC_BASE_URL: mockUrl,
     WORK_DIR: path.join(tmp, 'work2'), ANTHROPIC_TIMEOUT_SEC: '1',
+    ASSISTANT_PROVIDER: 'anthropic',
   }));
   const port = await listen(slowApp.server);
   script = () => new Promise(() => {}); // never answers

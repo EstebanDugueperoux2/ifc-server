@@ -1,0 +1,63 @@
+# .github/workflows/deploy-server.yml  (server repo)
+name: Deploy server to Cloud Run
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  id-token: write   # required for Workload Identity Federation
+
+env:
+  SERVICE: ifc-server
+  PORT: "3001"      # must match the port the server listens on
+  IMAGE: ${{ vars.GCP_REGION }}-docker.pkg.dev/${{ vars.GCP_PROJECT_ID }}/ifc/ifc-server
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: google-github-actions/auth@v2
+        with:
+          workload_identity_provider: ${{ vars.WIF_PROVIDER }}
+          service_account: ${{ vars.GCP_SERVICE_ACCOUNT }}
+
+      - uses: google-github-actions/setup-gcloud@v2
+
+      - name: Configure Docker for Artifact Registry
+        run: gcloud auth configure-docker ${{ vars.GCP_REGION }}-docker.pkg.dev --quiet
+
+      - uses: docker/setup-buildx-action@v3
+
+      - name: Build and push
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          push: true
+          tags: |
+            ${{ env.IMAGE }}:${{ github.sha }}
+            ${{ env.IMAGE }}:latest
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      # Volume flags need the gcloud CLI (the deploy-cloudrun action does not support them)
+      - name: Deploy
+        run: |
+          gcloud run deploy "$SERVICE" \
+            --image "$IMAGE:${{ github.sha }}" \
+            --region "${{ vars.GCP_REGION }}" \
+            --service-account "${{ vars.RUNTIME_SA }}" \
+            --port "$PORT" \
+            --cpu 2 --memory 4Gi \
+            --timeout 3600 \
+            --min-instances 0 --max-instances 1 \
+            --execution-environment gen2 \
+            --add-volume name=data,type=cloud-storage,bucket=${{ vars.DATA_BUCKET }} \
+            --add-volume-mount volume=data,mount-path=/data \
+            --allow-unauthenticated
+        # --max-instances 1 avoids several instances building separate caches.
+        # Remove --allow-unauthenticated if you put IAP or auth in front of the service.

@@ -19,23 +19,10 @@ services:
       - CACHE_MAX_AGE_DAYS=${CACHE_MAX_AGE_DAYS:-30}
     # No restart in dev - easier to debug
 
-  model-store:
-    build: ./model-store
-    container_name: ifc-server-model-store-dev
-    ports:
-      - "127.0.0.1:${STORE_PORT:-3002}:8081"
-    volumes:
-      - ./models:/data  # Local directory for inspecting stored models
-    environment:
-      - STORE_API_TOKEN=${STORE_API_TOKEN:-}
-      - CORS_ALLOWED_ORIGINS=${CORS_ALLOWED_ORIGINS:-}
-
   # AI assistant: Anthropic tool-use loop + embedded @ifc-lite/mcp server
   assistant:
     build: ./assistant
     container_name: ifc-server-assistant-dev
-    depends_on:
-      - model-store
     ports:
       # Loopback only by default: every request spends Anthropic API credits.
       - "127.0.0.1:${ASSISTANT_PORT:-3003}:8082"
@@ -44,7 +31,4 @@ services:
       - ANTHROPIC_MODEL=${ANTHROPIC_MODEL:-claude-sonnet-5-5}
       - ASSISTANT_API_TOKEN=${ASSISTANT_API_TOKEN:-}
       - ASSISTANT_READ_ONLY=${ASSISTANT_READ_ONLY:-false}
-      - MAX_MODEL_MB=${ASSISTANT_MAX_MODEL_MB:-100}
-      - STORE_URL=http://model-store:8081
-      - STORE_API_TOKEN=${STORE_API_TOKEN:-}
       - CORS_ALLOWED_ORIGINS=${CORS_ALLOWED_ORIGINS:-}
