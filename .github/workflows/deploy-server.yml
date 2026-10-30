@@ -13,7 +13,7 @@ permissions:
 env:
   SERVICE: ifc-server
   PORT: "3001"      # must match the port the server listens on
-  IMAGE: ${{ vars.GCP_REGION }}-docker.pkg.dev/${{ vars.GCP_PROJECT_ID }}/ifc/ifc-server
+  IMAGE: ghcr.io/ltplus-ag/ifc-lite-server
 
 jobs:
   deploy:
@@ -28,27 +28,11 @@ jobs:
 
       - uses: google-github-actions/setup-gcloud@v2
 
-      - name: Configure Docker for Artifact Registry
-        run: gcloud auth configure-docker ${{ vars.GCP_REGION }}-docker.pkg.dev --quiet
-
-      - uses: docker/setup-buildx-action@v3
-
-      - name: Build and push
-        uses: docker/build-push-action@v6
-        with:
-          context: .
-          push: true
-          tags: |
-            ${{ env.IMAGE }}:${{ github.sha }}
-            ${{ env.IMAGE }}:latest
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
-
       # Volume flags need the gcloud CLI (the deploy-cloudrun action does not support them)
       - name: Deploy
         run: |
           gcloud run deploy "$SERVICE" \
-            --image "$IMAGE:${{ github.sha }}" \
+            --image "$IMAGE:latest" \
             --region "${{ vars.GCP_REGION }}" \
             --service-account "${{ vars.RUNTIME_SA }}" \
             --port "$PORT" \
